@@ -45,6 +45,11 @@ export const MAIN_EVENTS = [
 
 export type MainRpcEvent = (typeof MAIN_EVENTS)[number];
 
+// Promoted argument interfaces are restricted to top-level keys with
+// high-confidence callsite evidence in the shipped 0.18.0 preload
+// (recovered/frontend/reports/main-rpc-payloads.json via
+// `npm run recover:main-rpc`); methods without callsite evidence stay on
+// Record<string, unknown> below.
 export interface KnownMainRpcArguments {
   openExternal: { url: string };
   openCloudAgent: { bcId: string };
@@ -58,21 +63,25 @@ export interface KnownMainRpcArguments {
   getLinkMetadata: { url: string };
   generateAgentAvatarImage: { description: string };
   transcribeAudio: { audio: Uint8Array; mimeType: string; language?: string };
+  applyFeatureFlagOverride: { command: unknown };
   updateCursorAccountName: { name: string };
   setThemePreference: { preference: "system" | "light" | "dark" };
   setEgressTunnelEnabled: { enabled: boolean };
   setWebauthnProxyEnabled: { enabled: boolean };
   setOnboardingSeen: { seen: boolean };
   setTimeZoneOverride: { timeZone: string | null };
-  setSidebarCollapsed: { collapsed: boolean };
   resizeWindowWidth: { deltaWidth: number };
   setTitleBarOverlayTone: { isOverlayTone: boolean };
   updateComputer: { id: string; force: boolean };
   setUpdateTrack: { track: "stable" | "nightly" | "dogfood" };
   setAutoUpdateWhenIdleOptIn: { enabled: boolean };
-  removeMcpServer: { serverId: string };
-  uninstallPlugin: { pluginId: string };
-  listMcpServerTools: { serverId: string };
+  setAutoReviewInstructions: { instructions: unknown };
+  setLocalToolPermission: { permission: unknown };
+  recordLocalToolApproval: { approvalId: string; action: unknown; target: unknown };
+  setHostPinnedAgents: { pinnedAgentIds: readonly string[] };
+  setHostSidebarSections: { sections: readonly unknown[] };
+  setAgentDefaultModel: { model: unknown };
+  setComputerUseModel: { model: unknown };
 }
 
 export type MainRpcArguments<Method extends MainRpcMethod> =

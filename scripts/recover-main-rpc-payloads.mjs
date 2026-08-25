@@ -22,7 +22,10 @@ export const REPORT_PATH = path.join(REPO_ROOT, "recovered", "frontend", "report
 
 export const CHANNEL_PREFIX = "sand-rpc:main:m:";
 const SCANNED_EXTENSIONS = new Set([".js", ".cjs", ".mjs"]);
-const PRELOAD_SUBDIR = "electron-preload";
+// The documented payload root is the extracted upstream ASAR tree
+// (`src/app/dist` from `npm run bootstrap`); its shipped preload scripts live
+// under electron-preload/. A raw ASAR root (with a nested dist/) also works.
+const PRELOAD_SUBDIRS = ["electron-preload", path.join("dist", "electron-preload")];
 
 function slash(value) {
   return value.split(path.sep).join("/");
@@ -42,15 +45,17 @@ async function collectScripts(directory) {
 }
 
 async function selectSources(payloadDir) {
-  const preferred = path.join(payloadDir, PRELOAD_SUBDIR);
-  try {
-    const entries = await stat(preferred);
-    if (entries.isDirectory()) {
-      const files = await collectScripts(preferred);
-      if (files.length > 0) return { root: preferred, scope: PRELOAD_SUBDIR, files };
+  for (const subdir of PRELOAD_SUBDIRS) {
+    const preferred = path.join(payloadDir, subdir);
+    try {
+      const entries = await stat(preferred);
+      if (entries.isDirectory()) {
+        const files = await collectScripts(preferred);
+        if (files.length > 0) return { root: preferred, scope: subdir, files };
+      }
+    } catch {
+      // Try the next layout candidate.
     }
-  } catch {
-    // Fall through to a full payload scan.
   }
   return { root: payloadDir, scope: ".", files: await collectScripts(payloadDir) };
 }
@@ -113,42 +118,98 @@ function visitCalls(ast, visit) {
   }
 }
 
+/**
+ * Shipped MAIN_METHOD_TABLE declarator: the exact per-method argument-kind
+ * registry bundled into the preload.
+ */
+export function recoverMethodTable(ast) {
+  const entries = {};
+  const stack = [ast];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (node == null || typeof node.type !== "string") continue;
+    if (node.type === "VariableDeclarator" && node.id?.type === "Identifier"
+      && node.id.name === "MAIN_METHOD_TABLE" && node.init?.type === "ObjectExpression") {
+      for (const property of node.init.properties) {
+        if (property.type !== "Property" || property.computed || property.key.type !== "Identifier") continue;
+        if (property.value?.type !== "ObjectExpression") continue;
+        const argsProperty = property.value.properties.find(
+          (inner) => inner.type === "Property" && !inner.computed && inner.key?.name === "args",
+        );
+        const kind = argsProperty?.value?.type === "Literal" ? argsProperty.value.value : null;
+        if (kind === "none" || kind === "object") entries[property.key.name] = kind;
+      }
+    }
+    for (const key of Object.keys(node)) {
+      if (key === "type" || key === "loc") continue;
+      const value = node[key];
+      if (Array.isArray(value)) stack.push(...value);
+      else if (value != null && typeof value === "object") stack.push(value);
+    }
+  }
+  return entries;
+}
+
+/** Callee chain like `mainEdge.method` -> "method", else null. */
+function mainEdgeMethodName(callee) {
+  if (callee?.type !== "MemberExpression" || callee.computed) return null;
+  if (callee.property.type !== "Identifier") return null;
+  const object = callee.object;
+  if (object.type === "Identifier" && object.name === "mainEdge") return callee.property.name;
+  if (object.type === "MemberExpression" && !object.computed && object.property?.name === "mainEdge") {
+    // e.g. desktop.mainEdge.method
+    return callee.property.name;
+  }
+  return null;
+}
+
+function recordCall(call, payloadArgument) {
+  const argument = call.arguments[payloadArgument];
+  const record = { line: call.loc?.start.line ?? null, confidence: "high" };
+  if (argument == null) {
+    record.argumentKind = "none";
+    record.confidence = "medium"; // provable at this callsite, but sibling callers may differ
+  } else {
+    const keys = objectLiteralKeys(argument);
+    if (keys != null && argument.properties.every((property) => property.type === "Property")) {
+      record.argumentKind = "object";
+      record.keys = [...new Set(keys)].sort();
+    } else if (keys != null) {
+      // Partially literal (spread present): keep only the provable prefix.
+      record.argumentKind = "object";
+      record.keys = [...new Set(keys)].sort();
+      record.confidence = "medium";
+    } else {
+      record.argumentKind = "nonliteral";
+      record.confidence = "low";
+    }
+  }
+  void payloadArgument;
+  return record;
+}
+
 export function recoverFromSource(source) {
-  const methods = Object.create(null);
-  const dynamicChannels = [];
   let ast;
   try {
     ast = parseSource(source);
   } catch {
-    return { methods, dynamicChannels, parseError: true };
+    return { methods: {}, dynamicChannels: [], methodTable: {}, parseError: true };
   }
+  const methodTable = recoverMethodTable(ast);
+  const methods = Object.create(null);
+  const dynamicChannels = [];
   visitCalls(ast, (call) => {
     const channel = staticString(call.arguments[0]);
     if (channel != null) {
       if (!channel.startsWith(CHANNEL_PREFIX)) return;
       const method = channel.slice(CHANNEL_PREFIX.length);
       if (method.length === 0) return;
-      const argument = call.arguments[1];
-      const record = { line: call.loc?.start.line ?? null, confidence: "high" };
-      if (argument == null) {
-        record.argumentKind = "none";
-        record.confidence = "medium"; // shipped call sites that pass no payload
-      } else {
-        const keys = objectLiteralKeys(argument);
-        if (keys != null && argument.properties.every((property) => property.type === "Property")) {
-          record.argumentKind = "object";
-          record.keys = [...new Set(keys)].sort();
-        } else if (keys != null) {
-          // Partially literal (spread present): keep only the provable prefix.
-          record.argumentKind = "object";
-          record.keys = [...new Set(keys)].sort();
-          record.confidence = "medium";
-        } else {
-          record.argumentKind = "nonliteral";
-          record.confidence = "low";
-        }
-      }
-      (methods[method] ??= []).push(record);
+      (methods[method] ??= []).push(recordCall(call, 1));
+      return;
+    }
+    const method = mainEdgeMethodName(call.callee);
+    if (method != null && method !== "subscribe") {
+      (methods[method] ??= []).push(recordCall(call, 0));
       return;
     }
     const first = call.arguments[0];
@@ -158,7 +219,7 @@ export function recoverFromSource(source) {
       dynamicChannels.push({ line: call.loc?.start.line ?? null });
     }
   });
-  return { methods, dynamicChannels, parseError: false };
+  return { methods, dynamicChannels, methodTable, parseError: false };
 }
 
 export async function recoverMainRpcPayloads(payloadDir = DEFAULT_PAYLOAD_DIR) {
@@ -179,6 +240,7 @@ export async function recoverMainRpcPayloads(payloadDir = DEFAULT_PAYLOAD_DIR) {
   }
   const sources = [];
   const methods = Object.create(null);
+  const methodTables = [];
   const dynamicChannels = [];
   const unparseable = [];
   for (const file of files) {
@@ -191,6 +253,9 @@ export async function recoverMainRpcPayloads(payloadDir = DEFAULT_PAYLOAD_DIR) {
     const recovered = recoverFromSource(contents.toString("utf8"));
     if (recovered.parseError) unparseable.push(slash(path.relative(REPO_ROOT, file)));
     const relative = slash(path.relative(REPO_ROOT, file));
+    if (Object.keys(recovered.methodTable).length > 0) {
+      methodTables.push({ file: relative, entries: recovered.methodTable });
+    }
     for (const [method, records] of Object.entries(recovered.methods)) {
       for (const record of records) (methods[method] ??= []).push({ file: relative, ...record });
     }
@@ -208,6 +273,7 @@ export async function recoverMainRpcPayloads(payloadDir = DEFAULT_PAYLOAD_DIR) {
     scanScope: scope,
     sources,
     unparseable,
+    shippedMethodTable: methodTables,
     methods,
     unresolvedDynamicChannels: dynamicChannels,
   };
