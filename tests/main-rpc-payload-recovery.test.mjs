@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { REPORT_PATH, recoverFromSource, recoverMainRpcPayloads, staticString } from "../scripts/recover-main-rpc-payloads.mjs";
-
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 
 test("static string evaluation covers literals, templates and concatenation", () => {
@@ -64,6 +63,29 @@ test("spread arguments are recorded with reduced confidence and prefix keys", ()
   const recovered = recoverFromSource("invoke('sand-rpc:main:m:updatePluginInstall', { pluginId, ...rest });");
   assert.deepEqual(recovered.methods.updatePluginInstall[0].keys, ["pluginId"]);
   assert.equal(recovered.methods.updatePluginInstall[0].confidence, "medium");
+});
+
+test("shipped preload shapes: MAIN_METHOD_TABLE declarator and mainEdge member calls", () => {
+  const source = [
+    "var MAIN_METHOD_TABLE = {",
+    "  openExternal: { args: \"object\" },",
+    "  getThemeState: { args: \"none\" },",
+    "};",
+    "var bridge = bridgeEdge(contract, MAIN_METHOD_TABLE, transport);",
+    "async function wrapper(url) { await mainEdge.openExternal({ url }); }",
+    "async function reader() { return await desktop.mainEdge.getThemeState(); }",
+    "mainEdge.subscribe({ 'theme-changed': listener });",
+  ].join("\n");
+  const recovered = recoverFromSource(source);
+  assert.deepEqual(recovered.methodTable, { openExternal: "object", getThemeState: "none" });
+  assert.deepEqual(recovered.methods.openExternal, [
+    { line: 6, argumentKind: "object", keys: ["url"], confidence: "high" },
+  ]);
+  assert.deepEqual(recovered.methods.getThemeState, [
+    { line: 7, argumentKind: "none", confidence: "medium" },
+  ]);
+  // Event-handler maps are not RPC method payloads.
+  assert.equal(recovered.methods.subscribe, undefined);
 });
 
 test("end-to-end recovery over a fixture payload directory", async () => {
@@ -140,6 +162,24 @@ test("reviewed payload contracts stay backed by recovered 0.18.0 evidence", asyn
   }
   assert.equal(report.schemaVersion, 1);
   assert.equal(report.edge, "main");
+
+  // The reviewed method table must be byte-for-byte equivalent in content to
+  // the registry bundled into the shipped preload.
+  if (report.shippedMethodTable?.length > 0) {
+    const [primary, ...rest] = report.shippedMethodTable;
+    for (const copy of rest) {
+      assert.deepEqual(
+        copy.entries,
+        primary.entries,
+        `Shipped MAIN_METHOD_TABLE copies disagree: ${primary.file} vs ${copy.file}`,
+      );
+    }
+    assert.deepEqual(
+      frontendTable,
+      primary.entries,
+      "frontend MAIN_METHOD_TABLE drifted from the shipped 0.18.0 registry",
+    );
+  }
 
   // Every recovered method must be part of the reviewed method table.
   for (const method of Object.keys(report.methods)) {
