@@ -9,7 +9,7 @@ export function parseVersion(version: string): ParsedSandVersion | null {
   const match = RELEASE_PATTERN.exec(releasePart);
   if (match == null) return null;
   const prerelease = prereleasePart == null ? [] : prereleasePart.split(".");
-  if (prerelease.some((identifier) => identifier.length === 0)) return null;
+  if (prerelease.some((identifier) => !/^[0-9A-Za-z-]+$/.test(identifier))) return null;
   return { release: [Number(match[1]), Number(match[2]), Number(match[3])], prerelease };
 }
 

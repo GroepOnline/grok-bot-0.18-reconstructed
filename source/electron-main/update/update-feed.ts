@@ -26,9 +26,9 @@ export function parseUpdateResponse(payload: unknown, kind: "squirrel" | "iupdat
   const value = payload as Record<string, unknown>;
   if (!validUrl(value.url)) throw new UpdateResponseFormatError("url must be a valid URL");
   if (kind === "iupdate") {
-    if (typeof value.version !== "string" || value.version.length === 0) throw new UpdateResponseFormatError("version must be a non-empty string");
-    if (value.sha256hash !== undefined && (typeof value.sha256hash !== "string" || value.sha256hash.length === 0)) throw new UpdateResponseFormatError("sha256hash must be a non-empty string");
-    return { version: value.version, url: value.url, ...(value.sha256hash == null ? {} : { sha256: value.sha256hash }) };
+    if (typeof value.version !== "string" || parseVersion(value.version) == null) throw new UpdateResponseFormatError("version must be a valid SemVer version");
+    if (typeof value.sha256hash !== "string" || !/^[a-f0-9]{64}$/i.test(value.sha256hash)) throw new UpdateResponseFormatError("sha256hash must be a 64-character SHA-256 hex digest");
+    return { version: value.version, url: value.url, sha256: value.sha256hash };
   }
   if (typeof value.name !== "string" || value.name.length === 0) throw new UpdateResponseFormatError("name must be a non-empty string");
   return { version: value.name, url: value.url, name: `${SAND_PRODUCT_DISPLAY_NAME} ${value.name}` };
