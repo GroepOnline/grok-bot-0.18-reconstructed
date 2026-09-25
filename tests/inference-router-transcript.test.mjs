@@ -11,14 +11,17 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 
 async function loadModule() {
   const temporary = await mkdtemp(path.join(os.tmpdir(), "grok-inference-router-transcript-"));
-  const output = path.join(temporary, "inference-router.mjs");
+  const output = path.join(temporary, "inference-router.cjs");
   await build({
     entryPoints: [path.join(repoRoot, "source/node-agent-coordinator/inference-router.ts")],
     outfile: output,
     bundle: true,
-    format: "esm",
+    // Shipping node bundles are CJS. AI SDK 7 pulls in @vercel/oidc, whose require("path") cannot load from an ESM bundle.
+    format: "cjs",
     platform: "node",
     target: "node22",
+    define: { "import.meta.url": "__cleanImportMetaUrl" },
+    banner: { js: "const __cleanImportMetaUrl = require(\"node:url\").pathToFileURL(__filename).href;" },
   });
   const module = await import(`${pathToFileURL(output).href}?${Date.now()}`);
   return { module, dispose: () => rm(temporary, { recursive: true, force: true }) };

@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { query as queryClaude, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createOpenAI } from "@ai-sdk/openai";
-import { jsonSchema, streamText, tool, type CoreMessage, type LanguageModelV1, type ToolSet } from "ai";
+import { jsonSchema, stepCountIs, streamText, tool, type LanguageModel, type ModelMessage, type ToolSet } from "ai";
 
 import { BasePromptBuilder, BasePromptExecutor } from "../../../packages/chat-inference/base.js";
 import type { SandInferenceProvider } from "../../../shared/inference-router.js";
@@ -234,22 +234,25 @@ function toToolSet(definitions: readonly Loose[] | undefined, executeTool?: Rout
     if (typeof definition.name !== "string" || definition.name.length === 0) continue;
     const parameters = definition.inputSchema ?? definition.parameters;
     if (parameters == null) continue;
-    const routedTool: any = {
-      ...(typeof definition.description === "string" ? { description: definition.description } : {}),
-      parameters: jsonSchema(parameters),
-    };
-    if (executeTool != null) routedTool.execute = async (args: unknown, options: { toolCallId: string }) => await executeTool(definition, args, options.toolCallId);
-    tools[definition.name] = tool(routedTool);
+    const description = typeof definition.description === "string" ? { description: definition.description } : {};
+    const inputSchema = jsonSchema(parameters);
+    tools[definition.name] = executeTool == null
+      ? tool({ ...description, inputSchema })
+      : tool({
+          ...description,
+          inputSchema,
+          execute: async (args: unknown, options: { toolCallId: string }) => await executeTool(definition, args, options.toolCallId),
+        });
   }
   return Object.keys(tools).length === 0 ? undefined : tools;
 }
 
 function openRouterExecutor(messages: readonly ProviderMessage[], invocationId: string, definitions?: readonly Loose[], executeTool?: RoutedToolExecutor, onUsage?: (usage: UsageRecord) => void) {
   const id = process.env.SAND_OPENROUTER_MODEL?.trim() || "openai/gpt-5.2";
-  const model: LanguageModelV1 = createOpenAI({ apiKey: openRouterCredential(), baseURL: "https://openrouter.ai/api/v1", compatibility: "compatible", name: "openrouter", headers: { "HTTP-Referer": "https://github.com/grok-bot-reconstructed", "X-Title": "Grok Bot Reconstructed" } }).chat(id as any);
+  const model: LanguageModel = createOpenAI({ apiKey: openRouterCredential(), baseURL: "https://openrouter.ai/api/v1", name: "openrouter", headers: { "HTTP-Referer": "https://github.com/grok-bot-reconstructed", "X-Title": "Grok Bot Reconstructed" } }).chat(id);
   const tools = toToolSet(definitions, executeTool);
-  const result = streamText({ model, system: GROK_ROUTER_SYSTEM_PROMPT, messages: messages as CoreMessage[], ...(tools === undefined ? {} : { tools }), toolCallStreaming: true, maxSteps: tools === undefined ? 1 : 8 });
-  const extendedUsage = result.usage.then(value => ({ inputTokens: value.promptTokens, outputTokens: value.completionTokens, cacheReadTokens: 0, cacheWriteTokens: 0, maxTokens: 0 }));
+  const result = streamText({ model, system: GROK_ROUTER_SYSTEM_PROMPT, messages: messages as ModelMessage[], ...(tools === undefined ? {} : { tools }), stopWhen: stepCountIs(tools === undefined ? 1 : 8) });
+  const extendedUsage = result.usage.then(value => ({ inputTokens: value.inputTokens ?? 0, outputTokens: value.outputTokens ?? 0, cacheReadTokens: value.inputTokenDetails.cacheReadTokens ?? 0, cacheWriteTokens: value.inputTokenDetails.cacheWriteTokens ?? 0, maxTokens: 0 }));
   if (onUsage != null) void extendedUsage.then(onUsage);
   return { fullStream: result.fullStream, response: result.response, usage: result.usage, extendedUsage, providerMetadata: result.providerMetadata, invocationId: Promise.resolve(invocationId) };
 }
@@ -268,6 +271,13 @@ export function createProviderPromptSession(provider: RoutedProvider): { getMode
   return { getModelId: () => modelId, getExecutor: state => new ProviderPromptExecutor(provider, Array.isArray(state) ? state as ProviderMessage[] : undefined, usage => recordRoutedUsage(provider, usage)) };
 }
 
+function streamedTextDelta(event: { readonly type: string }): string | undefined {
+  if (event.type !== "text-delta") return undefined;
+  if ("text" in event && typeof event.text === "string") return event.text;
+  if ("textDelta" in event && typeof event.textDelta === "string") return event.textDelta;
+  return undefined;
+}
+
 export async function runRoutedProviderText(provider: RoutedProvider, messages: readonly ProviderMessage[], options?: {
   readonly mcpServerUrl?: string;
   readonly tools?: readonly Loose[];
@@ -283,9 +293,10 @@ export async function runRoutedProviderText(provider: RoutedProvider, messages: 
       : openRouterExecutor(messages, invocationId, options?.tools, options?.executeTool, onUsage);
   let text = "";
   for await (const event of result.fullStream) {
-    if (event.type === "text-delta" && typeof event.textDelta === "string") {
-      text += event.textDelta;
-      options?.onTextDelta?.(event.textDelta, text);
+    const textDelta = streamedTextDelta(event);
+    if (textDelta != null) {
+      text += textDelta;
+      options?.onTextDelta?.(textDelta, text);
     }
   }
   await result.response;
