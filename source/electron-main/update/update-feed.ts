@@ -28,7 +28,7 @@ export function parseUpdateResponse(payload: unknown, kind: "squirrel" | "iupdat
   if (kind === "iupdate") {
     if (typeof value.version !== "string" || parseVersion(value.version) == null) throw new UpdateResponseFormatError("version must be a valid SemVer version");
     if (typeof value.sha256hash !== "string" || !/^[a-f0-9]{64}$/i.test(value.sha256hash)) throw new UpdateResponseFormatError("sha256hash must be a 64-character SHA-256 hex digest");
-    return { version: value.version, url: value.url, sha256: value.sha256hash };
+    return { version: value.version, url: value.url, sha256: value.sha256hash.toLowerCase() };
   }
   if (typeof value.name !== "string" || value.name.length === 0) throw new UpdateResponseFormatError("name must be a non-empty string");
   return { version: value.name, url: value.url, name: `${SAND_PRODUCT_DISPLAY_NAME} ${value.name}` };
