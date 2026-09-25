@@ -103,12 +103,12 @@ function parseSource(source) {
   }
 }
 
-function visitCalls(ast, visit) {
+function walkAst(ast, visit) {
   const stack = [ast];
   while (stack.length > 0) {
     const node = stack.pop();
     if (node == null || typeof node.type !== "string") continue;
-    if (node.type === "CallExpression") visit(node);
+    visit(node);
     for (const key of Object.keys(node)) {
       if (key === "type" || key === "loc") continue;
       const value = node[key];
@@ -118,35 +118,35 @@ function visitCalls(ast, visit) {
   }
 }
 
+function visitCalls(ast, visit) {
+  walkAst(ast, (node) => {
+    if (node.type === "CallExpression") visit(node);
+  });
+}
+
+function methodTableEntry(property) {
+  if (property.type !== "Property" || property.computed || property.key?.type !== "Identifier") return null;
+  if (property.value?.type !== "ObjectExpression") return null;
+  const argsProperty = property.value.properties.find(
+    (inner) => inner.type === "Property" && !inner.computed && inner.key?.name === "args",
+  );
+  const kind = argsProperty?.value?.type === "Literal" ? argsProperty.value.value : null;
+  return kind === "none" || kind === "object" ? [property.key.name, kind] : null;
+}
+
 /**
  * Shipped MAIN_METHOD_TABLE declarator: the exact per-method argument-kind
  * registry bundled into the preload.
  */
 export function recoverMethodTable(ast) {
   const entries = {};
-  const stack = [ast];
-  while (stack.length > 0) {
-    const node = stack.pop();
-    if (node == null || typeof node.type !== "string") continue;
-    if (node.type === "VariableDeclarator" && node.id?.type === "Identifier"
-      && node.id.name === "MAIN_METHOD_TABLE" && node.init?.type === "ObjectExpression") {
-      for (const property of node.init.properties) {
-        if (property.type !== "Property" || property.computed || property.key.type !== "Identifier") continue;
-        if (property.value?.type !== "ObjectExpression") continue;
-        const argsProperty = property.value.properties.find(
-          (inner) => inner.type === "Property" && !inner.computed && inner.key?.name === "args",
-        );
-        const kind = argsProperty?.value?.type === "Literal" ? argsProperty.value.value : null;
-        if (kind === "none" || kind === "object") entries[property.key.name] = kind;
-      }
+  walkAst(ast, (node) => {
+    if (node.type !== "VariableDeclarator" || node.id?.name !== "MAIN_METHOD_TABLE" || node.init?.type !== "ObjectExpression") return;
+    for (const property of node.init.properties) {
+      const entry = methodTableEntry(property);
+      if (entry != null) entries[entry[0]] = entry[1];
     }
-    for (const key of Object.keys(node)) {
-      if (key === "type" || key === "loc") continue;
-      const value = node[key];
-      if (Array.isArray(value)) stack.push(...value);
-      else if (value != null && typeof value === "object") stack.push(value);
-    }
-  }
+  });
   return entries;
 }
 
