@@ -416,11 +416,12 @@ export function createTaskTool(
     try { parsedJson = typeof raw === "string" ? JSON.parse(raw) : raw; }
     catch (error) { throw new Error(`Invalid arguments:\nargument: ${error instanceof Error ? error.message : "Failed to parse arguments"}`); }
     const result = schemaForParsing.safeParse(parsedJson);
-    if (!result.success) throw new Error(`Invalid arguments:\n${result.error.errors.map((error: Any) => `${error.path.length > 0 ? error.path.join(".") : "argument"}: ${error.message}`).join("\n")}`);
-    assertMachineAndLegacyArgsNotBothSet(result.data);
-    assertCloudOnlyTaskArgsAllowed(result.data);
-    if (result.data.resume?.trim().toLowerCase() === "self" && !allowResumeSelfFork) throw new Error('Invalid arguments:\nresume="self" is not available for this Task tool.');
-    return result.data as TaskRawArguments;
+    if (!result.success) throw new Error(`Invalid arguments:\n${result.error.issues.map((error: Any) => `${error.path.length > 0 ? error.path.join(".") : "argument"}: ${error.message}`).join("\n")}`);
+    const data = result.data as TaskRawArguments;
+    assertMachineAndLegacyArgsNotBothSet(data);
+    assertCloudOnlyTaskArgsAllowed(data);
+    if (data.resume?.trim().toLowerCase() === "self" && !allowResumeSelfFork) throw new Error('Invalid arguments:\nresume="self" is not available for this Task tool.');
+    return data;
   };
   const execute = async (ctx: Context, interactionHandler: Any, rawArgs: TaskRawArguments, meta: ToolExecutionMetaLike): Promise<TaskResult> => {
     const parentState = createParentStateAccessor(stateHandler);
