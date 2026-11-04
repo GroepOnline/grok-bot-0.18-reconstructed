@@ -46,7 +46,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@floating-ui/dom": "^1.7.6",
     "@opentelemetry/api": "^1.9.0",
-    "@opentelemetry/core": "^2.2.0",
+    "@opentelemetry/core": "^3.0.0",
     "@opentelemetry/exporter-trace-otlp-proto": "^0.208.0",
     "@opentelemetry/resources": "^2.2.0",
     "@opentelemetry/sdk-trace-node": "^2.2.0",
@@ -71,7 +71,7 @@
     "cursor-proclist": "file:../vscode/native-modules/cursor-proclist",
     "emojibase-data": "17.0.0",
     "highlight.js": "^11.9.0",
-    "katex": "^0.16.21",
+    "katex": "^0.19.1",
     "mammoth": "^1.12.0",
     "mermaid": "^11.16.0",
     "motion": "^12.18.1",
@@ -83,10 +83,10 @@
     "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",
     "remark-math-extended": "^6.1.0",
-    "undici": "8.11.2",
+    "undici": "8.12.2",
     "ws": "8.21.0",
     "xlsx": "^0.18.5",
-    "zod": "^3.25.0"
+    "zod": "^4.6.7"
   },
   "sandTrack": "stable"
 }
